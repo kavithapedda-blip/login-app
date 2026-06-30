@@ -77,6 +77,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # --- TEMPORARY DEBUG ---------------------------------------------------
+      # Prints THIS run's OIDC identity so you can copy the exact `sub` into the
+      # IAM role trust policy (see docs/aws-oidc-setup.md). Shows only selected,
+      # non-secret claims — never the raw token. Remove this step once the
+      # "Configure AWS credentials (OIDC)" step below succeeds.
+      - name: Debug — show OIDC subject claim
+        run: |
+          TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r '.value')
+          echo "$TOKEN" | cut -d. -f2 | python3 -c '
+          import sys, base64, json
+          p = sys.stdin.read().strip()
+          p += "=" * (-len(p) % 4)                       # restore base64 padding
+          claims = json.loads(base64.urlsafe_b64decode(p))
+          keep = ["sub", "aud", "repository", "ref", "event_name", "workflow"]
+          print(json.dumps({k: claims.get(k) for k in keep}, indent=2))
+          '
+      # --- END TEMPORARY DEBUG -----------------------------------------------
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -84,8 +103,13 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Inject backend URL into frontend
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          sed -i "s|http://localhost:8000|http://${{ secrets.EC2_HOST }}:8000|" frontend/index.html
+          # Strip any stray spaces/newlines from the secret so sed gets a clean,
+          # single-line host value (a dirty secret was breaking the s|...| command).
+          host=$(printf '%s' "$EC2_HOST" | tr -d '[:space:]')
+          sed -i "s|http://localhost:8000|http://${host}:8000|" frontend/index.html
 
       - name: Sync frontend to S3
         run: |
