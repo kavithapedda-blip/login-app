@@ -1,0 +1,92 @@
+name: CI/CD Pipeline
+
+# WHEN this runs: on every push to the main branch.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:        # also lets you run it manually from the Actions tab
+
+# Needed for OIDC (keyless auth to AWS for the S3 deploy).
+permissions:
+  id-token: write           # allows GitHub to request an OIDC token
+  contents: read
+
+jobs:
+  # ===================================================================
+  # JOB 1 — CI: run the tests. If these fail, nothing deploys.
+  # ===================================================================
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Run tests
+        working-directory: backend
+        run: pytest -v
+
+  # ===================================================================
+  # JOB 2 — CD: deploy the backend to EC2 over SSH.
+  # Runs only if the test job passed (needs: test).
+  # ===================================================================
+  deploy-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy code to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}          # EC2 public IP / DNS
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}        # the .pem private key contents
+          source: "backend/*,scripts/*"
+          target: "/home/ubuntu/app"
+          overwrite: true
+
+      - name: Run deploy script on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: JWT_SECRET,ALLOWED_ORIGINS
+          script: |
+            export JWT_SECRET="${{ secrets.JWT_SECRET }}"
+            export ALLOWED_ORIGINS="${{ secrets.ALLOWED_ORIGINS }}"
+            chmod +x /home/ubuntu/app/scripts/deploy_backend.sh
+            /home/ubuntu/app/scripts/deploy_backend.sh
+
+  # ===================================================================
+  # JOB 3 — CD: deploy the frontend to S3 using OIDC (no stored AWS keys).
+  # Runs only if the test job passed.
+  # ===================================================================
+  deploy-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Inject backend URL into frontend
+        run: |
+          sed -i "s|http://localhost:8000|http://${{ secrets.EC2_HOST }}:8000|" frontend/index.html
+
+      - name: Sync frontend to S3
+        run: |
+          aws s3 sync frontend/ s3://${{ secrets.S3_BUCKET }}/ --delete
