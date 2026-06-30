@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 360px; margin: 4rem auto; }
+    label { display: block; margin: .75rem 0 .25rem; }
+    input { width: 100%; padding: .5rem; box-sizing: border-box; }
+    .buttons { display: flex; gap: .5rem; margin-top: 1rem; }
+    button { flex: 1; padding: .6rem 1rem; cursor: pointer; }
+    #status { margin-top: 1rem; min-height: 1.2em; }
+    .error { color: #b00020; }
+    .ok { color: #0a7d28; }
+  </style>
+</head>
+<body>
+  <h1>Login</h1>
+  <form id="auth-form">
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" required />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <div class="buttons">
+      <button type="submit">Sign in</button>
+      <button type="button" id="register-btn">Register</button>
+    </div>
+  </form>
+  <div id="status"></div>
+
+  <script>
+    const API_BASE_URL = "http://localhost:8000";
+    const form = document.getElementById("auth-form");
+    const statusEl = document.getElementById("status");
+
+    async function submitTo(path, busyText) {
+      statusEl.className = "";
+      statusEl.textContent = busyText;
+
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+
+      try {
+        const res = await fetch(`${API_BASE_URL}${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          statusEl.className = "error";
+          statusEl.textContent = (data && data.detail) || `Request failed (${res.status})`;
+          return;
+        }
+
+        if (data.access_token) {
+          // on success: keep the token so the client can prove it's logged in
+          localStorage.setItem("access_token", data.access_token);
+          statusEl.className = "ok";
+          statusEl.textContent = "Logged in. Token stored.";
+        } else {
+          statusEl.className = "ok";
+          statusEl.textContent = data.message
+            ? `${data.message}: ${data.username}. You can sign in now.`
+            : "Done.";
+        }
+      } catch (err) {
+        statusEl.className = "error";
+        statusEl.textContent = "Network error: " + err.message;
+      }
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitTo("/login", "Signing in...");
+    });
+
+    document.getElementById("register-btn").addEventListener("click", () => {
+      if (!form.reportValidity()) return;
+      submitTo("/register", "Registering...");
+    });
+  </script>
+</body>
+</html>
